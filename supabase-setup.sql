@@ -18,8 +18,11 @@ create table if not exists counters (
 alter table records  enable row level security;
 alter table counters enable row level security;
 
-create policy "team only" on records  for all to authenticated using (true) with check (true);
-create policy "team only" on counters for all to authenticated using (true) with check (true);
+-- Only the shared team login can read or write, even if someone else manages to create an account
+create policy "team account only" on records  for all to authenticated
+  using ((select auth.jwt() ->> 'email') = 'team@kalakriti.app') with check ((select auth.jwt() ->> 'email') = 'team@kalakriti.app');
+create policy "team account only" on counters for all to authenticated
+  using ((select auth.jwt() ->> 'email') = 'team@kalakriti.app') with check ((select auth.jwt() ->> 'email') = 'team@kalakriti.app');
 grant select, insert, update, delete on records, counters to authenticated;
 revoke all on records, counters from anon;
 
