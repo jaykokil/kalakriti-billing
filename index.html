@@ -327,6 +327,7 @@ const ready=/^https:/.test(SUPABASE_URL)&&window.supabase;
 const sb=ready?supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{storage:sessionStorage,persistSession:true}}):null;
 const KINDS={payees:'payee',docs:'doc',products:'product',inventory:'inv'};
 let snap={}, chan=null, rT;
+const ME=Math.random().toString(36).slice(2,10);   // this device/tab, to recognise our own saves
 function setSync(t,bad){ $('syncState').innerHTML=`<span class="${bad?'bad':''}">● ${t}</span>`; }
 function fixItems(){ DATA.docs.forEach(d=>(d.items||[]).forEach(i=>{if(i.item===undefined){i.item=i.desc||'';i.desc='';}})); }
 function toRecords(){ const r={company:{kind:'company',data:DATA.company}}; for(const [a,k] of Object.entries(KINDS)) DATA[a].forEach(x=>r[x.id]={kind:k,data:x}); return r; }
@@ -335,6 +336,8 @@ function applyRow(r){
   else{ const a=Object.keys(KINDS).find(a=>KINDS[a]===r.kind); if(!a) return; const i=DATA[a].findIndex(x=>x.id===r.id); i>=0?DATA[a][i]=r.data:DATA[a].push(r.data); }
   snap[r.id]=JSON.stringify(r.data);
 }
+function localOf(r){ if(r.kind==='company') return DATA.company; const a=Object.keys(KINDS).find(a=>KINDS[a]===r.kind); return a?DATA[a].find(x=>x.id===r.id):null; }
+function isStale(r){ const cur=localOf(r); if(!cur) return false; const iv=+r.data._v||0, lv=+cur._v||0; return iv<lv||(iv===lv&&r.data._w===ME); }
 function removeId(id){ for(const a in KINDS) DATA[a]=DATA[a].filter(x=>x.id!==id); delete snap[id]; }
 async function fetchAll(){
   let all=[]; for(let f=0;;f+=1000){ const {data,error}=await sb.from('records').select('id,kind,data').range(f,f+999); if(error) throw error; all=all.concat(data); if(data.length<1000) break; }
@@ -348,14 +351,14 @@ async function loadData(){
       DATA=Object.assign(blank(),old); fixItems(); await persist(); await bumpCounters(old.counters); }
   }catch(e){ setSync('Offline',1); $('main').innerHTML='<div class="empty"><div class="serif">Could not load data</div>Check your internet connection, then refresh the page.</div>'; return; }
   if(!chan) chan=sb.channel('records').on('postgres_changes',{event:'*',schema:'public',table:'records'},p=>{
-      p.eventType==='DELETE'?removeId(p.old.id):applyRow(p.new); fixItems(); queueRender(); })
+      if(p.eventType==='DELETE') removeId(p.old.id); else { if(isStale(p.new)) return; applyRow(p.new); } fixItems(); queueRender(); })
     .subscribe(st=>setSync(st==='SUBSCRIBED'?'Synced':'Reconnecting…',st!=='SUBSCRIBED'));
   setSync('Synced'); render();
 }
 function queueRender(){ clearTimeout(rT); rT=setTimeout(()=>{ const a=document.activeElement; if(a&&a.classList.contains('search')&&a.value) return queueRender(); render(); },300); }
 async function persist(){
   const cur=toRecords(), up=[], del=Object.keys(snap).filter(id=>!cur[id]);
-  for(const [id,r] of Object.entries(cur)) if(snap[id]!==JSON.stringify(r.data)) up.push({id,kind:r.kind,data:r.data});
+  for(const [id,r] of Object.entries(cur)) if(snap[id]!==JSON.stringify(r.data)){ r.data._v=(+r.data._v||0)+1; r.data._w=ME; up.push({id,kind:r.kind,data:r.data}); }
   if(!up.length&&!del.length) return;
   setSync('Saving…');
   try{
